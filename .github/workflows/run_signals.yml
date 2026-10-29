@@ -1,0 +1,107 @@
+name: Automated Daily Macro Signals Engine
+
+on:
+  schedule:
+    # This triggers the code automatically Monday through Friday at 13:00 UTC (8:00 AM EST)
+    - cron: '0 13 * * 1-5'
+  workflow_dispatch:
+    # This button lets you run a manual test directly inside your browser anytime
+
+jobs:
+  execute-macro-regime:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Set Up Python Engine
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install Unrestricted Data Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install numpy==1.26.4 pandas==2.2.1 yfinance==0.2.37
+
+    - name: Run Macro Signals Engine and Dispatch Hotmail Report
+      run: |
+        cat << 'EOF' > engine.py
+        import os
+        import sys
+        import warnings
+        import smtplib
+        from email.mime.text import MIMEText
+        from email.mime.multipart import MIMEMultipart
+
+        warnings.filterwarnings("ignore")
+        import numpy as np
+        import pandas as pd
+        import yfinance as yf
+
+        def get_ticker_close(df, ticker):
+            ticker_df = df[ticker]
+            col_map = {str(col).lower(): col for col in ticker_df.columns}
+            if 'adj close' in col_map: return ticker_df[col_map['adj close']]
+            elif 'close' in col_map: return ticker_df[col_map['close']]
+            return ticker_df.iloc[:, 0]
+
+        def send_report_email(report_text, score):
+            sender_email = "todd-nash@hotmail.com"
+            receiver_email = "todd-nash@hotmail.com"
+            app_password = "rvccpctjnzlqeold" 
+            
+            msg = MIMEMultipart()
+            msg['From'] = sender_email
+            msg['To'] = receiver_email
+            msg['Subject'] = f"Tactical Macro Regime Report - Score: {score}/5"
+            msg.attach(MIMEText(report_text, 'plain'))
+            try:
+                with smtplib.SMTP('://office365.com', 587, timeout=30) as server:
+                    server.ehlo()
+                    server.starttls()
+                    server.ehlo()
+                    server.login(sender_email, app_password)
+                    server.sendmail(sender_email, receiver_email, msg.as_string())
+                return True
+            except Exception as e:
+                print(f"Mail failed: {e}")
+                return False
+
+        def build_macro_signals():
+            assets = {"Equities": "SPY", "Bonds": "TLT", "Commodities": "GLD", "Volatility": "^VIX", "Credit_Spread": "HYG"}
+            try:
+                data = yf.download(list(assets.values()), period="1y", interval="1d", group_by="ticker", progress=False)
+                if data.empty: return
+                
+                spy_series = get_ticker_close(data, assets["Equities"]).dropna()
+                check_1 = spy_series.iloc[-1] > spy_series.rolling(window=200).mean().iloc[-1]
+                vix_series = get_ticker_close(data, assets["Volatility"]).dropna()
+                check_2 = vix_series.iloc[-1] < 20.0
+                tlt_series = get_ticker_close(data, assets["Bonds"]).dropna()
+                check_3 = tlt_series.iloc[-1] > (tlt_series.iloc[-21] if len(tlt_series) > 21 else tlt_series.iloc[-1])
+                gld_series = get_ticker_close(data, assets["Commodities"]).dropna()
+                check_4 = gld_series.iloc[-1] > (gld_series.iloc[-21] if len(gld_series) > 21 else gld_series.iloc[-1])
+                hyg_series = get_ticker_close(data, assets["Credit_Spread"]).dropna()
+                check_5 = hyg_series.iloc[-1] > hyg_series.rolling(window=50).mean().iloc[-1]
+                
+                checks = {"Check 1: Equity Trend (SPY > 200MA)": check_1, "Check 2: Volatility Regime (VIX < 20)": check_2, "Check 3: Bond Momentum (20D TLT Return > 0)": check_3, "Check 4: Commodity Safety (20D GLD Return > 0)": check_4, "Check 5: Credit Market Health (HYG > 50MA)": check_5}
+                passed_count = sum(1 for val in checks.values() if val)
+                
+                report = ["==========================================", "        TACTICAL MACRO REGIME REPORT      ", "=========================================="]
+                for name, result in checks.items():
+                    report.append(f"{name:45} : {'PASSED' if result else 'FAILED'}")
+                report.append("------------------------------------------")
+                regime = "BULLISH (Risk-On)" if passed_count >= 4 else "FRAGILE / NEUTRAL" if passed_count == 3 else "BEARISH (Risk-Off)"
+                report.append(f"Final Score: {passed_count}/5 Checks Passed\nRegime: {regime}\n==========================================")
+                
+                full_report_text = "\n".join(report)
+                print(full_report_text)
+                send_report_email(full_report_text, passed_count)
+            except Exception as e:
+                print(f"Error: {e}")
+
+        if __name__ == "__main__":
+            build_macro_signals()
+        EOF
+        python engine.py
